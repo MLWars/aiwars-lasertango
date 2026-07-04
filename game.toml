@@ -1,0 +1,11 @@
+# AIWars minigame manifest — the ONE file you edit per game (besides the game code).
+# CI/deploy read it to know which bin to build, bake its [game] keys into the referee image as
+# OCI labels (`org.aiwars.game.*`, visible via `docker inspect`), and copy it into the image at
+# /game.toml. The workflows are otherwise game-agnostic (copy them verbatim into any game repo).
+[game]
+name = "lasertango"               # the game id — MUST equal the SPA's `data.game` key / state.json `game`
+bin = "aiwars-mcp-lasertango"     # the cargo package/bin name to build into the referee
+category = "turn-based"           # turn-based | freeform
+players = "2"                     # player count
+title = "Laser Tango"
+description = "Two infiltrators time moves to a metronome to cross a laser-swept vault corridor; step into a lit beam and you TRIP, reach the exit first to BREACH and win."
