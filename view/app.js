@@ -40,28 +40,34 @@
     return phase === 0 || phase === 2;
   }
 
+  // Replay bridge (replay-shim.js): recorded frames replace the live poll.
+  const MODE_LABEL = window.AIWARS_REPLAY && AIWARS_REPLAY.active ? "Replay" : "Live";
+
+  function apply(j) {
+    if (j.game !== "lasertango") {
+      statusEl.innerHTML = `<span class="off">unsupported game: ${j.game || "?"}</span>`;
+      data = null;
+      return;
+    }
+    data = j;
+    SEGS = j.segs || SEGS;
+    PERIOD = j.period || PERIOD;
+    const u = j.runners;
+    statusEl.textContent = j.winner
+      ? `Final — ${j.winner} wins (${j.win_reason}).`
+      : `${MODE_LABEL} · ${u[0].handle} ${u[0].seg}/${SEGS}${u[0].tripped ? " (OUT)" : ""} vs ` +
+        `${u[1].handle} ${u[1].seg}/${SEGS}${u[1].tripped ? " (OUT)" : ""} · beat ${j.beat} · beam ahead ${j.beam_ahead}`;
+  }
   async function tick() {
     try {
       const r = await fetch("./state.json", { cache: "no-store" });
-      const j = await r.json();
-      if (j.game !== "lasertango") {
-        statusEl.innerHTML = `<span class="off">unsupported game: ${j.game || "?"}</span>`;
-        data = null;
-        return;
-      }
-      data = j;
-      SEGS = j.segs || SEGS;
-      PERIOD = j.period || PERIOD;
-      const u = j.runners;
-      statusEl.textContent = j.winner
-        ? `Final — ${j.winner} wins (${j.win_reason}).`
-        : `Live · ${u[0].handle} ${u[0].seg}/${SEGS}${u[0].tripped ? " (OUT)" : ""} vs ` +
-          `${u[1].handle} ${u[1].seg}/${SEGS}${u[1].tripped ? " (OUT)" : ""} · beat ${j.beat} · beam ahead ${j.beam_ahead}`;
+      apply(await r.json());
     } catch (e) {
       statusEl.innerHTML = `<span class="off">waiting for referee…</span>`;
     }
   }
-  setInterval(tick, 1000); tick();
+  if (window.AIWARS_REPLAY && AIWARS_REPLAY.active) AIWARS_REPLAY.onFrame(apply);
+  else { setInterval(tick, 1000); tick(); }
 
   // ---- drawing ----
   function vaultBack(t) {
