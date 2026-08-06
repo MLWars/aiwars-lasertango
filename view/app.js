@@ -11,7 +11,7 @@
 
   // corridor perspective geometry (mirrors the POC): segment i → screen depth.
   const FLOOR_Y = H - 70;
-  const TOP_Y = 110;        // vanishing point pushed down so EXIT clears the odds pill
+  const TOP_Y = 110;        // vanishing point pushed down so the door clears the top strip
   const DOOR_X = W * 0.5;
   const lerp = (a, b, t) => a + (b - a) * t;
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -55,8 +55,8 @@
     const u = j.runners;
     statusEl.textContent = j.winner
       ? `Final — ${j.winner} wins (${j.win_reason}).`
-      : `${MODE_LABEL} · ${u[0].handle} ${u[0].seg}/${SEGS}${u[0].tripped ? " (OUT)" : ""} vs ` +
-        `${u[1].handle} ${u[1].seg}/${SEGS}${u[1].tripped ? " (OUT)" : ""} · beat ${j.beat} · beam ahead ${j.beam_ahead}`;
+      : `${MODE_LABEL} · ${u[0].handle} ${u[0].seg}/${SEGS}${u[0].tripped ? " OUT" : ""} vs ` +
+        `${u[1].handle} ${u[1].seg}/${SEGS}${u[1].tripped ? " OUT" : ""} · beat ${j.beat}`;
   }
   async function tick() {
     try {
@@ -182,7 +182,7 @@
     glow(x, y - h + 12, 8, breached ? "rgba(52,211,153,0.5)" : "rgba(42,134,196,0.4)");
     ctx.fillStyle = breached ? "#34d399" : (on ? "#2a86c4" : "#16415e");
     ctx.beginPath(); ctx.arc(x, y - h + 12, 3, 0, 7); ctx.fill();
-    // LABEL kept BELOW the door so it clears the top-center odds pill.
+    // LABEL kept BELOW the door so it clears the top strip.
     const ly = y + 10, lw = breached ? 96 : 54;
     ctx.fillStyle = breached ? "rgba(8,30,22,0.9)" : "rgba(8,18,30,0.82)";
     rrect(x - lw / 2, ly - 11, lw, 15, 4); ctx.fill();
@@ -238,53 +238,75 @@
     }
     label(p.x, p.y - 50, "ONE PIXEL", 9, "#ffd27a", "center");
   }
-  function beatBar(beat, offsets, t) {
-    const y = H - 92, h = 30, x0 = 16, x1 = W - 16, bw = x1 - x0;
-    ctx.fillStyle = "rgba(6,10,18,0.9)"; rrect(x0, y, bw, h, 7); ctx.fill();
-    ctx.strokeStyle = "rgba(52,211,153,0.3)"; ctx.lineWidth = 1; rrect(x0 + .5, y + .5, bw - 1, h - 1, 7); ctx.stroke();
-    label(x0 + 12, y + 19, "♪ BEAT", 10, "#34d399", "left");
-    const N = PERIOD, tx0 = x0 + 78, tw = (x1 - 14 - tx0), phase = ((beat % N) + N) % N;
+  // ---- chrome ----
+  // The corridor owns the canvas from the exit door's frame (y = 40) down, so
+  // the one band that clears gameplay is the sliver above it: the beat readout
+  // and the vault line share a single 30px strip. The HUD and odds cards hang
+  // in the upper corners, outside the wall quads (which meet the strip's y at
+  // x 346..434 only — everything left of x≈300 / right of x≈480 is empty).
+  const STRIP_H = 30;
+  function topStrip(beat, t) {
+    if (!data) return;
+    ctx.fillStyle = "rgba(5,9,16,.94)"; ctx.fillRect(0, 0, W, STRIP_H);
+    ctx.strokeStyle = "rgba(52,211,153,.4)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, STRIP_H - .5); ctx.lineTo(W, STRIP_H - .5); ctx.stroke();
+    label(14, 19, "♪ BEAT", 10, "#34d399", "left");
+    const N = PERIOD, tx0 = 72, tw = 30 * N, cy = STRIP_H / 2, phase = ((beat % N) + N) % N;
     for (let k = 0; k < N; k++) {
       const cx = tx0 + (k + 0.5) * (tw / N), cur = k === phase;
       const gap = !(k === 0 || k === 2);   // phases 1,3 are the safe gaps
       ctx.fillStyle = gap ? "rgba(40,90,70,0.5)" : "rgba(90,40,46,0.5)";
-      ctx.beginPath(); ctx.arc(cx, y + h / 2, cur ? 11 : 8, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy, cur ? 10 : 7, 0, 7); ctx.fill();
       if (cur) {
         const pulse = 0.6 + 0.4 * Math.sin(t / 120);
         ctx.fillStyle = gap ? `rgba(52,211,153,${pulse})` : `rgba(255,70,80,${pulse})`;
-        ctx.beginPath(); ctx.arc(cx, y + h / 2, 6, 0, 7); ctx.fill();
-        glow(cx, y + h / 2, 18, gap ? "rgba(52,211,153,0.4)" : "rgba(255,70,80,0.4)");
+        ctx.beginPath(); ctx.arc(cx, cy, 5.5, 0, 7); ctx.fill();
+        glow(cx, cy, 16, gap ? "rgba(52,211,153,0.4)" : "rgba(255,70,80,0.4)");
       } else {
         ctx.fillStyle = gap ? "#1c4a38" : "#4a1c22";
-        ctx.beginPath(); ctx.arc(cx, y + h / 2, 4, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, 3.5, 0, 7); ctx.fill();
       }
-      label(cx, y + h, gap ? "GAP" : "SWEEP", 7, gap ? "#5eead4" : "#ff8a93", "center");
     }
-    const phx = tx0 + ((phase + 0.5) / N) * tw;
-    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(phx, y + 4); ctx.lineTo(phx, y + h - 4); ctx.stroke();
+    // per-pip GAP/SWEEP captions don't fit a slim strip — the pips stay
+    // colour-coded and the live phase is spelled out once, after them.
+    const gapNow = !(phase === 0 || phase === 2);
+    label(tx0 + tw + 10, 19, gapNow ? "GAP" : "SWEEP", 9, gapNow ? "#5eead4" : "#ff8a93", "left");
+    let line;
+    if (data.winner) {
+      line = data.win_reason === "breach" ? `${data.winner} breaches the exit door first.`
+        : data.win_reason === "trip" ? `${data.winner} walks it clean — the rival tripped.`
+        : `Time's up — ${data.winner} was deepest.`;
+    } else if (data.status === "doubletrip") {
+      line = "Both trip a beam — double-out, draw.";
+    } else {
+      line = `Beat ${data.beat} · ${data.to_move} to move · beam ahead ${data.beam_ahead}`;
+    }
+    const lx = tx0 + tw + 66;
+    label(lx, 19, fit(line, W - 14 - lx, 11), 11, "#cfe0ff", "left");
   }
   function hud() {
     if (!data) return;
     const u = data.runners, rows = [[u[0], "#10b981", "#5eead4"], [u[1], "#8b5cf6", "#c4b5fd"]];
-    ctx.fillStyle = "rgba(8,14,26,.84)"; rrect(12, 12, 244, 70, 10); ctx.fill();
-    ctx.strokeStyle = "rgba(52,211,153,.4)"; ctx.lineWidth = 1; rrect(12.5, 12.5, 243, 69, 10); ctx.stroke();
-    label(24, 28, "CORRIDOR CROSSING", 9, "#7fb0d8", "left");
+    ctx.fillStyle = "rgba(8,14,26,.84)"; rrect(12, 46, 244, 70, 10); ctx.fill();
+    ctx.strokeStyle = "rgba(52,211,153,.4)"; ctx.lineWidth = 1; rrect(12.5, 46.5, 243, 69, 10); ctx.stroke();
+    label(24, 62, "CORRIDOR CROSSING", 9, "#7fb0d8", "left");
     rows.forEach(([r, col, soft], i) => {
-      const y = 44 + i * 20;
+      const y = 78 + i * 20;
       label(24, y + 4, r.handle.toUpperCase().slice(0, 12), 10, soft, "left");
       bar(110, y - 4, 88, 8, r.seg / SEGS, col);
       label(206, y + 4, r.breached ? "DOOR" : r.tripped ? "OUT" : r.seg + "/" + SEGS, 9,
         r.tripped ? "#ff5d6c" : r.breached ? "#34d399" : soft, "left");
     });
   }
+  // odds card, upper-RIGHT: the top-centre slot belongs to the exit door, whose
+  // frame starts at y=40, and the strip above owns the full width.
   function oddsPill() {
     if (!data) return;
     const u = data.runners;
     const a = oddsA(), pa = Math.round(a * 100), pb = 100 - pa;
-    const bw = 248, x = (W - bw) / 2, yy = 7;
+    const bw = 248, x = W - 12 - bw, yy = 46;
     ctx.fillStyle = "rgba(7,11,20,.86)"; rrect(x, yy, bw, 30, 9); ctx.fill();
-    label(W / 2, yy + 12, "◷ LIVE ODDS", 8, "#7C8AA0", "center");
+    label(x + bw / 2, yy + 12, "◷ LIVE ODDS", 8, "#7C8AA0", "center");
     label(x + 12, yy + 12, u[0].handle.toUpperCase().slice(0, 8) + " " + pa + "%", 9, "#5eead4", "left");
     label(x + bw - 12, yy + 12, pb + "% " + u[1].handle.toUpperCase().slice(0, 8), 9, "#c4b5fd", "right");
     const aw = Math.max(2, (bw - 24) * a);
@@ -299,27 +321,6 @@
     const f = (x) => 1 / (1 + Math.exp(-x));
     const a = f(lead + dead + live), b = f(-(lead + dead + live) + (u[1].tripped ? -6 : 0) + (u[0].tripped ? 4 : 0));
     return a / (a + b || 1);
-  }
-  function dispatcher() {
-    const h = 44, y = H - h;
-    ctx.fillStyle = "rgba(5,9,16,.94)"; ctx.fillRect(0, y, W, h);
-    ctx.strokeStyle = "rgba(52,211,153,.4)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(W, y + .5); ctx.stroke();
-    label(16, y + 18, "📡 VAULT", 10, "#34d399", "left");
-    let line = "Two infiltrators time a laser corridor to the beat — who waits for clean gaps, who slides under the sweeping beams?";
-    if (data) {
-      const u = data.runners;
-      if (data.winner) {
-        line = data.win_reason === "breach" ? `${data.winner} breaches the exit door first — corridor cleared.`
-          : data.win_reason === "trip" ? `${data.winner} walks the corridor clean — the rival tripped a beam.`
-          : `Time's up — ${data.winner} was deepest in the corridor.`;
-      } else if (data.status === "doubletrip") {
-        line = "Both infiltrators trip a beam — double-out, draw.";
-      } else {
-        line = `Beat ${data.beat} · ${data.to_move}'s move · beam ahead is ${data.beam_ahead}. ` +
-          `${u[0].handle} ${u[0].seg}/${SEGS} vs ${u[1].handle} ${u[1].seg}/${SEGS}.`;
-      }
-    }
-    label(92, y + 18, line.slice(0, 92), 12, "#cfe0ff", "left");
   }
   function finishOverlay(t) {
     const trip = data.win_reason === "trip" || data.win_reason === "doubletrip" || data.status === "doubletrip";
@@ -356,6 +357,10 @@
   function frame(t) {
     vaultBack(t); walls(); floorGrid();
     if (data) {
+      // chrome first: if a runner ever reaches it, the runner wins the pixel.
+      topStrip(data.beat || 0, t);
+      hud();
+      oddsPill();
       const u = data.runners;
       const breached = (u[0].breached || u[1].breached) && data.winner != null;
       exitDoor(t, breached);
@@ -370,10 +375,6 @@
       const order = pos[0].seg > pos[1].seg ? [0, 1] : [1, 0];
       for (const i of order) infiltrator(pos[i], i, u[i].handle);
       for (let i = 0; i < 2; i++) if (pos[i].near && !data.winner && !pos[i].tripped) nearMissSpark(pos[i], t);
-      beatBar(data.beat || 0, data.offsets, t);
-      hud();
-      dispatcher();
-      oddsPill();
       if (data.winner != null || data.status === "doubletrip" || data.status === "stall") finishOverlay(t);
     } else {
       exitDoor(t, false);
@@ -386,6 +387,14 @@
   // ---- tiny helpers ----
   function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
   function label(x, y, t, px, c, al) { ctx.fillStyle = c; ctx.textAlign = al || "left"; ctx.font = `700 ${px}px ui-monospace,monospace`; ctx.fillText(t, x, y); }
+  // one line, ellipsized to maxw — the strip truncates, it never wraps.
+  function fit(s, maxw, px) {
+    ctx.font = `700 ${px}px ui-monospace,monospace`;
+    if (ctx.measureText(s).width <= maxw) return s;
+    let t = s;
+    while (t.length > 1 && ctx.measureText(t + "…").width > maxw) t = t.slice(0, -1);
+    return t + "…";
+  }
   function bar(x, y, w, h, f, c) { ctx.fillStyle = "#0a1322"; rrect(x, y, w, h, h / 2); ctx.fill(); ctx.fillStyle = c; rrect(x, y, Math.max(2, w * clamp(f, 0, 1)), h, h / 2); ctx.fill(); }
   function glow(x, y, r, c) { const g = ctx.createRadialGradient(x, y, 0, x, y, Math.max(1, r)); g.addColorStop(0, c); g.addColorStop(1, c.replace(/[\d.]+\)$/, "0)")); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, Math.max(1, r), 0, 7); ctx.fill(); }
   function shadow(x, y, w, h, a) { ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.beginPath(); ctx.ellipse(x, y, w, h, 0, 0, 7); ctx.fill(); }
