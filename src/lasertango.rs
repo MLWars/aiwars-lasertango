@@ -552,9 +552,10 @@ mod tests {
     }
 
     /// Drive a whole corridor the way a client does: read `to_move_idx`/`ply`, play the first
-    /// legal move. A decisive result (a breach or a trip) must emerge within the metronome cap.
+    /// legal move (`advance:gap`) every turn. On the fixed seed that untimed run walks both
+    /// runners into a lit beam, so the match ends in the double-trip draw.
     #[test]
-    fn a_full_game_resolves_to_winner_or_draw() {
+    fn a_blind_advance_run_double_trips_into_a_draw() {
         let mut m = started(7);
         let mut guard = 0;
         while !m.is_resolved() && guard < 128 {
@@ -562,7 +563,8 @@ mod tests {
             let ply = m.state_json()["ply"].as_u64().unwrap() as u32;
             // prefer to advance toward the door; the first legal move is `advance:gap`.
             let mv = m.turn_info(seat)["moves"][0].as_str().unwrap().to_string();
-            let _ = m.make_move(seat, &mv, ply);
+            m.make_move(seat, &mv, ply)
+                .unwrap_or_else(|e| panic!("seat {seat} playing {mv} at ply {ply}: {e}"));
             guard += 1;
         }
         assert!(
@@ -570,8 +572,41 @@ mod tests {
             "match must resolve within the metronome cap"
         );
         let result = m.result().expect("resolved match has a result");
-        assert!(result.outcome == "Winner" || result.outcome == "Draw");
-        assert!(m.state_json()["moves"].as_array().unwrap().is_empty());
+        // Seed 7 is fixed, so this run is fixed: both runners blindly advance into a lit
+        // beam and trip. Asserting `Winner || Draw` instead would prove nothing — that
+        // disjunction is the whole range of `outcome` and holds with the trip rule deleted.
+        assert_eq!(result.outcome, "Draw");
+        let st = m.state_json();
+        assert_eq!(st["win_reason"], "doubletrip");
+        assert_eq!(st["runners"][0]["tripped"], true);
+        assert_eq!(st["runners"][1]["tripped"], true);
+        assert!(st["moves"].as_array().unwrap().is_empty());
+    }
+
+    /// The other terminal path, which the double-trip run above never reaches: timing every
+    /// step to a DARK beam walks the corridor and BREACHES the door for the win.
+    #[test]
+    fn timing_the_gaps_breaches_the_door_and_wins() {
+        let mut g = LaserTango::new(&runners(), &json!({ "seed": 7 })).unwrap();
+        let mut guard = 0;
+        while !g.resolved && guard < 200 {
+            let seg = g.runners[0].seg;
+            // Step only when the beam guarding the next boundary is dark; otherwise hold.
+            let mv = if g.beam_lit(seg + 1, g.beat) {
+                "wait:beat"
+            } else {
+                "advance:gap"
+            };
+            g.apply(&AgentId("tempo".into()), mv).unwrap();
+            if !g.resolved {
+                g.apply(&AgentId("blitz".into()), "wait:beat").unwrap();
+            }
+            guard += 1;
+        }
+        assert!(g.runners[0].breached, "a well-timed run reaches the door");
+        assert!(!g.runners[0].tripped, "and never clips a beam on the way");
+        assert_eq!(g.win_reason, "breach");
+        assert_eq!(g.outcome(), Some(Outcome::Win(AgentId("tempo".into()))));
     }
 
     #[test]
@@ -626,37 +661,54 @@ mod tests {
     }
 
     #[test]
+    /// Seed 3 puts boundary 1's beam phase at LIT on beat 0, so this exercises the trip rule
+    /// for real. (The seed is asserted, not assumed: `beam_ahead` must read LIT, or the test
+    /// would be checking the dark branch under a name that promises the lit one.)
     fn stepping_into_a_lit_beam_trips() {
-        // On seed 1 the beam guarding boundary 1 is either LIT or DARK on beat 0; assert the
-        // rule either way — advancing into a lit beam trips, a dark gap gains a segment.
-        let mut m = started(1);
-        let lit = m.state_json()["beam_ahead"] == "LIT";
+        let mut m = started(3);
+        assert_eq!(
+            m.state_json()["beam_ahead"],
+            "LIT",
+            "seed 3 opens on a lit beam"
+        );
         let st = m.make_move(0, "advance:gap", 0).unwrap();
-        if lit {
-            assert_eq!(
-                st["runners"][0]["tripped"], true,
-                "advancing into a lit beam trips"
-            );
-        } else {
-            assert_eq!(
-                st["runners"][0]["seg"], 1,
-                "advancing through a dark gap gains a segment"
-            );
-        }
+        assert_eq!(st["runners"][0]["tripped"], true, "the lit beam trips");
+        assert_eq!(st["runners"][0]["seg"], 0, "and gains no ground");
+    }
+
+    /// The complementary branch, on a seed whose opening beam is DARK.
+    #[test]
+    fn stepping_through_a_dark_gap_gains_a_segment() {
+        let mut m = started(1);
+        assert_eq!(
+            m.state_json()["beam_ahead"],
+            "DARK",
+            "seed 1 opens on a dark gap"
+        );
+        let st = m.make_move(0, "advance:gap", 0).unwrap();
+        assert_eq!(st["runners"][0]["seg"], 1, "the dark gap is crossed");
+        assert_eq!(st["runners"][0]["tripped"], false);
     }
 
     /// A slide only lands when BOTH beams ahead are dark; otherwise it clips one and trips.
     #[test]
+    /// "Only" is a two-sided claim, so both sides are asserted, each on a seed that actually
+    /// reaches it — seed 5 opens with both beams dark, seed 1 with the second one lit.
     fn slide_lands_only_in_the_double_dark_window() {
         let mut g = LaserTango::new(&runners(), &json!({ "seed": 5 })).unwrap();
-        let clean = g.slide_clean(0, 0);
+        assert!(
+            g.slide_clean(0, 0),
+            "seed 5 opens in the double-dark window"
+        );
         g.apply(&AgentId("tempo".into()), "slide:under").unwrap();
-        if clean {
-            assert_eq!(g.runners[0].seg, 2, "a clean slide skips two segments");
-            assert!(!g.runners[0].tripped);
-        } else {
-            assert!(g.runners[0].tripped, "a clipped slide trips the runner");
-        }
+        assert_eq!(g.runners[0].seg, 2, "a clean slide skips two segments");
+        assert!(!g.runners[0].tripped);
+
+        let mut g = LaserTango::new(&runners(), &json!({ "seed": 1 })).unwrap();
+        assert!(!g.slide_clean(0, 0), "seed 1 opens outside the window");
+        g.apply(&AgentId("tempo".into()), "slide:under").unwrap();
+        assert!(g.runners[0].tripped, "a clipped slide trips the runner");
+        assert_eq!(g.runners[0].seg, 0, "and gains no ground");
     }
 
     /// The whole point of the port: the seat payload a HUMAN's browser console reads carries
@@ -670,5 +722,13 @@ mod tests {
         assert_eq!(s["turn"]["moves"].as_array().unwrap().len(), 3);
         assert_eq!(s["state"]["to_move"], "tempo");
         assert_eq!(m.seat_state(1)["turn"]["your_turn"], false);
+    }
+
+    /// The shipped game.toml must parse and its hold must validate — green CI implies a
+    /// bootable manifest (a typo in `[settings]` would otherwise crashloop every pod).
+    #[test]
+    fn game_toml_is_loadable() {
+        let settings = aiwars_minigame::settings::manifest_settings_at("game.toml").unwrap();
+        aiwars_minigame::settings::validate_hold(&settings).unwrap();
     }
 }
